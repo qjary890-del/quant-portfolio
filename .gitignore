@@ -4,6 +4,8 @@ __pycache__/
 .venv/
 venv/
 data/cache/
+data/cache/prices/
 output/
 *.parquet
 .DS_Store
+.env

@@ -1,13 +1,10 @@
-"""Price data download and caching."""
+"""Price data download and caching (Tiingo only — clean EOD)."""
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pandas as pd
-import yfinance as yf
 
-CACHE_DIR = Path(__file__).resolve().parent.parent / "data" / "cache"
+from data.providers import _tiingo_token, load_price_frame, normalize_ticker
 
 
 def download_prices(
@@ -15,37 +12,24 @@ def download_prices(
     start: str,
     end: str | None = None,
     *,
+    provider: str | None = "tiingo",
     use_cache: bool = True,
 ) -> pd.DataFrame:
-    """Download adjusted close prices; returns columns=tickers, index=dates."""
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    end_key = end or "latest"
-    cache_path = CACHE_DIR / f"prices_{start}_{end_key}_{len(tickers)}.csv"
-
-    if use_cache and cache_path.exists():
-        cached = pd.read_csv(cache_path, index_col=0, parse_dates=True)
-        missing = [t for t in tickers if t not in cached.columns]
-        if not missing:
-            return cached[tickers].dropna(how="all")
-
-    data = yf.download(
+    """Download Tiingo adjusted closes. Requires TIINGO_API_KEY."""
+    if not _tiingo_token():
+        raise RuntimeError(
+            "Clean price data requires Tiingo.\n"
+            "1) Sign up free: https://www.tiingo.com/account/api/token\n"
+            "2) Create project/.env with: TIINGO_API_KEY=your_token\n"
+            "Yahoo/Stooq are intentionally not used (noisy / blocked)."
+        )
+    print("Price provider: tiingo")
+    prices = load_price_frame(
         tickers,
-        start=start,
-        end=end,
-        auto_adjust=True,
-        progress=False,
-        threads=True,
+        start,
+        end,
+        provider="tiingo",
+        use_cache=use_cache,
     )
-    if data.empty:
-        raise RuntimeError("No price data downloaded. Check tickers / network.")
-
-    if isinstance(data.columns, pd.MultiIndex):
-        prices = data["Close"].copy()
-    else:
-        prices = data[["Close"]].copy()
-        prices.columns = tickers[:1]
-
-    prices = prices.sort_index().ffill(limit=5)
-    if use_cache:
-        prices.to_csv(cache_path)
-    return prices[tickers].dropna(how="all")
+    prices.columns = [normalize_ticker(c) for c in prices.columns]
+    return prices.dropna(how="all")

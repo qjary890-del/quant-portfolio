@@ -1,0 +1,123 @@
+"""Point-in-time S&P universe via pitindex (no Yahoo membership scraping)."""
+
+from __future__ import annotations
+
+import warnings
+from functools import lru_cache
+
+import pandas as pd
+
+try:
+    import pitindex
+except ImportError as exc:  # pragma: no cover
+    raise ImportError("pip install pitindex") from exc
+
+
+def normalize_ticker(t: str) -> str:
+    return str(t).replace(".", "-").upper()
+
+
+def _silence_stale_warning() -> None:
+    warnings.filterwarnings("ignore", category=getattr(pitindex, "StaleDataWarning", Warning))
+
+
+@lru_cache(maxsize=8)
+def _history(start: str, end: str, index: str) -> pd.DataFrame:
+    _silence_stale_warning()
+    return pitindex.get_constituents_history(start, end, index=index)
+
+
+def constituents_asof(as_of: str | pd.Timestamp, index: str = "sp500") -> pd.DataFrame:
+    _silence_stale_warning()
+    return pitindex.get_constituents(pd.Timestamp(as_of).date().isoformat(), index=index)
+
+
+def historical_tickers(start: str, end: str | None = None, index: str = "sp500") -> list[str]:
+    """Unique tickers that were index members at any point in [start, end]."""
+    end = end or pd.Timestamp.today().date().isoformat()
+    hist = _history(start, end, index)
+    return sorted({normalize_ticker(t) for t in hist["ticker"].dropna()})
+
+
+def membership_matrix(
+    dates: pd.DatetimeIndex,
+    tickers: list[str],
+    *,
+    index: str = "sp500",
+) -> pd.DataFrame:
+    """
+    Boolean DataFrame (dates x tickers): True if ticker was an index member
+    as of that date (forward-filled from PIT snapshots).
+    """
+    tickers = [normalize_ticker(t) for t in tickers]
+    if len(dates) == 0:
+        return pd.DataFrame(columns=tickers)
+
+    start = dates.min().date().isoformat()
+    end = dates.max().date().isoformat()
+    hist = _history(start, end, index).copy()
+    hist["as_of"] = pd.to_datetime(hist["as_of"])
+    hist["ticker"] = hist["ticker"].map(normalize_ticker)
+
+    wide = (
+        hist.assign(v=True)
+        .pivot_table(index="as_of", columns="ticker", values="v", aggfunc="max", fill_value=False)
+        .sort_index()
+    )
+    for t in tickers:
+        if t not in wide.columns:
+            wide[t] = False
+    wide = wide.reindex(columns=tickers).fillna(False)
+
+    # Seed days before first snapshot
+    if dates.min() < wide.index.min():
+        seed = constituents_asof(dates.min(), index=index)
+        seed_set = {normalize_ticker(t) for t in seed["ticker"]}
+        seed_row = pd.DataFrame(
+            [[t in seed_set for t in tickers]],
+            index=[dates.min()],
+            columns=tickers,
+        )
+        wide = pd.concat([seed_row, wide]).sort_index()
+        wide = wide[~wide.index.duplicated(keep="last")]
+
+    aligned = wide.reindex(wide.index.union(dates)).sort_index().ffill()
+    return aligned.reindex(dates).fillna(False).astype(bool)
+
+
+def sector_groups_asof(
+    as_of: str | pd.Timestamp,
+    tickers: list[str] | None = None,
+    *,
+    index: str = "sp500",
+    min_names: int = 2,
+) -> dict[str, list[str]]:
+    """GICS sector -> tickers present as of date (and optionally in `tickers`)."""
+    df = constituents_asof(as_of, index=index).copy()
+    df["ticker"] = df["ticker"].map(normalize_ticker)
+    if tickers is not None:
+        allowed = {normalize_ticker(t) for t in tickers}
+        df = df[df["ticker"].isin(allowed)]
+    df["gics_sector"] = df["gics_sector"].fillna("Unknown")
+    groups: dict[str, list[str]] = {}
+    for sector, part in df.groupby("gics_sector"):
+        names = sorted(part["ticker"].unique().tolist())
+        if len(names) >= min_names:
+            groups[str(sector)] = names
+    return groups
+
+
+def coverage_report(membership: pd.DataFrame, prices: pd.DataFrame) -> dict[str, float]:
+    """Share of PIT members that have a price that day (delist gap proxy)."""
+    common = membership.columns.intersection(prices.columns)
+    if len(common) == 0:
+        return {"avg_member_coverage": 0.0, "priced_tickers": 0.0}
+    mem = membership[common]
+    priced = prices[common].notna()
+    denom = mem.sum(axis=1).replace(0, pd.NA)
+    cov = (mem & priced).sum(axis=1) / denom
+    return {
+        "avg_member_coverage": float(cov.mean()),
+        "priced_tickers": float(len(common)),
+        "membership_days": float(len(membership)),
+    }
