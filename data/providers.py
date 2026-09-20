@@ -100,7 +100,7 @@ def load_price_frame(
     *,
     provider: str = "tiingo",
     use_cache: bool = True,
-    pause_sec: float = 75.0,  # ~50 req/hour on Tiingo free starter
+    pause_sec: float = 1.0,  # only applies on live fetches; cached reads are free
 ) -> pd.DataFrame:
     """Download (or cache-load) adjusted closes; columns = normalized tickers."""
     CACHE_DIR.mkdir(parents=True, exist_ok=True)

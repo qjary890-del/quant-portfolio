@@ -161,6 +161,7 @@ def screen_cointegrated_pairs(
     stability_step: int = 63,
     min_stability: float = 0.0,
     max_pairs: int = 12,
+    max_per_sector: int | None = 3,
 ) -> pd.DataFrame:
     """
     Screen intra-sector pairs on the formation sample.
@@ -173,6 +174,7 @@ def screen_cointegrated_pairs(
     4) half-life band filter
     5) optional rolling stability (chosen direction only)
     6) score = (-log10 p) * (0.5+0.5*stability) * corr * w_HL
+    7) take top scores with optional per-sector cap, then max_pairs
     """
     rows: list[dict] = []
     n_candidates = 0
@@ -239,7 +241,23 @@ def screen_cointegrated_pairs(
         empty.attrs["n_candidates"] = n_candidates
         empty.attrs["n_after_corr"] = n_after_corr
         return empty
-    ranked = result.sort_values("score", ascending=False).reset_index(drop=True).head(max_pairs)
+
+    ranked = result.sort_values("score", ascending=False).reset_index(drop=True)
+    if max_per_sector is not None and max_per_sector > 0:
+        picked: list[pd.Series] = []
+        counts: dict[str, int] = {}
+        for _, row in ranked.iterrows():
+            sec = str(row["sector"])
+            if counts.get(sec, 0) >= max_per_sector:
+                continue
+            picked.append(row)
+            counts[sec] = counts.get(sec, 0) + 1
+            if len(picked) >= max_pairs:
+                break
+        ranked = pd.DataFrame(picked).reset_index(drop=True)
+    else:
+        ranked = ranked.head(max_pairs)
+
     ranked.attrs["n_candidates"] = n_candidates
     ranked.attrs["n_after_corr"] = n_after_corr
     return ranked
