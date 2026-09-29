@@ -26,20 +26,21 @@ def pair_spread(
     x_ticker: str,
     lookback: int,
 ) -> pd.DataFrame:
-    """Rolling hedge ratio and mean-reverting spread for one pair."""
-    betas: list[float] = []
-    idx: list[pd.Timestamp] = []
-    for i in range(lookback, len(prices) + 1):
-        window = prices.iloc[i - lookback : i][[y_ticker, x_ticker]].dropna()
-        if len(window) < max(20, lookback // 2):
-            continue
-        betas.append(hedge_ratio(window[y_ticker], window[x_ticker]))
-        idx.append(prices.index[i - 1])
+    """
+    Rolling hedge ratio and mean-reverting spread for one pair.
 
-    beta_s = pd.Series(betas, index=idx, name="beta")
-    spread = prices[y_ticker].loc[beta_s.index] - beta_s * prices[x_ticker].loc[beta_s.index]
+    Uses rolling OLS slope via cov/var (no intercept in the slope estimate;
+    equivalent to demeaned regression beta). Vectorized for sweep speed.
+    """
+    y = prices[y_ticker]
+    x = prices[x_ticker]
+    min_p = max(20, lookback // 2)
+    cov = y.rolling(lookback, min_periods=min_p).cov(x)
+    var = x.rolling(lookback, min_periods=min_p).var(ddof=0)
+    beta = cov / var.replace(0, np.nan)
+    spread = y - beta * x
     z = zscore(spread, lookback)
-    return pd.DataFrame({"beta": beta_s, "spread": spread, "z": z})
+    return pd.DataFrame({"beta": beta, "spread": spread, "z": z})
 
 
 def pair_positions(

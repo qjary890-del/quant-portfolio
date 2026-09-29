@@ -19,11 +19,10 @@ from backtest.resilience import resilience_row
 from data.loader import download_prices
 from data.providers import cached_tiingo_tickers, normalize_ticker
 from data.universe_pit import (
-    constituents_asof,
     coverage_report,
     historical_tickers,
     membership_matrix,
-    normalize_ticker as pit_norm,
+    pit_price_tickers,
     sector_groups_asof,
 )
 from strategies.hybrid import (
@@ -44,6 +43,7 @@ from strategies.regime import (
 )
 from strategies.rolling_pairs import build_rolling_stat_arb_weights
 from strategies.stat_arb import build_stat_arb_weights
+from strategies.universe_structure import make_primary_grouping_fn
 
 
 def format_stats(name: str, stats: dict[str, float]) -> str:
@@ -77,12 +77,12 @@ def main() -> None:
             tickers = historical_tickers(config.START, end, index=config.PIT_INDEX)
             print(f"Historical member tickers (union): {len(tickers)}")
         else:
-            roster = constituents_asof(config.START, index=config.PIT_INDEX)
-            roster_set = {pit_norm(t) for t in roster["ticker"]}
-            # Prefer liquid seeds that were actually members at START (no look-ahead)
-            seed = [normalize_ticker(t) for t in config.UNIVERSE if normalize_ticker(t) in roster_set]
-            rest = sorted(roster_set - set(seed))
-            tickers = (seed + rest)[: int(getattr(config, "PIT_MAX_PRICED_NAMES", 50))]
+            tickers = pit_price_tickers(
+                config.START,
+                index=config.PIT_INDEX,
+                max_names=int(config.PIT_MAX_PRICED_NAMES),
+                seed=config.UNIVERSE,
+            )
             cached = set(cached_tiingo_tickers(config.START, config.END))
             have = [t for t in tickers if t in cached]
             need = [t for t in tickers if t not in cached]
@@ -180,6 +180,9 @@ def main() -> None:
             screen_kwargs=screen_kwargs,
             max_names_per_sector=config.COINT_MAX_NAMES_PER_SECTOR,
             fallback_pairs=fallback_pairs,
+            primary_grouping_fn=make_primary_grouping_fn(
+                config.PRIMARY_GROUPING, min_corr=config.PRIMARY_CLUSTER_MIN_CORR
+            ),
             verbose=True,
         )
         pair_log.to_csv(out_dir / "rolling_pairs_log.csv", index=False)
@@ -511,7 +514,7 @@ def main() -> None:
     latest = combined_for_plot.iloc[-1]
     active = latest[latest.abs() > 1e-6].sort_values()
     print("\nLatest Stat Arb (Shock+BookDD) weights (nonzero):")
-    print(active.to_string() if len(active) else "  (flat — shock/book-DD cooldown active)")
+    print(active.to_string() if len(active) else "  (flat - shock/book-DD cooldown active)")
     pd.DataFrame({"weight": active}).to_csv(out_dir / "latest_combined_weights.csv")
     print(f"\nArtifacts written to {out_dir}")
 

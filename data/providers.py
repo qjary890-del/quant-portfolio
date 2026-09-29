@@ -31,9 +31,9 @@ def normalize_ticker(ticker: str) -> str:
     return ticker.replace(".", "-").upper().strip()
 
 
-def _tiingo_token() -> str:
-    # Optional local .env without requiring python-dotenv at import time
-    if not os.environ.get("TIINGO_API_KEY"):
+def env_value(key: str) -> str:
+    """Environment variable, falling back to the repo-local .env (no python-dotenv needed)."""
+    if not os.environ.get(key):
         env_path = Path(__file__).resolve().parents[1] / ".env"
         if env_path.exists():
             for line in env_path.read_text(encoding="utf-8").splitlines():
@@ -41,10 +41,14 @@ def _tiingo_token() -> str:
                 if not line or line.startswith("#") or "=" not in line:
                     continue
                 k, v = line.split("=", 1)
-                if k.strip() == "TIINGO_API_KEY" and v.strip():
-                    os.environ["TIINGO_API_KEY"] = v.strip().strip('"').strip("'")
+                if k.strip() == key and v.strip():
+                    os.environ[key] = v.strip().strip('"').strip("'")
                     break
-    return os.environ.get("TIINGO_API_KEY", "").strip()
+    return os.environ.get(key, "").strip()
+
+
+def _tiingo_token() -> str:
+    return env_value("TIINGO_API_KEY")
 
 
 def fetch_tiingo_adj_close(

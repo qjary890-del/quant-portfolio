@@ -12,6 +12,8 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise ImportError("pip install pitindex") from exc
 
+from data.pit_sector_overrides import SECTOR_OVERRIDES
+
 
 def normalize_ticker(t: str) -> str:
     return str(t).replace(".", "-").upper()
@@ -29,7 +31,38 @@ def _history(start: str, end: str, index: str) -> pd.DataFrame:
 
 def constituents_asof(as_of: str | pd.Timestamp, index: str = "sp500") -> pd.DataFrame:
     _silence_stale_warning()
-    return pitindex.get_constituents(pd.Timestamp(as_of).date().isoformat(), index=index)
+    df = pitindex.get_constituents(pd.Timestamp(as_of).date().isoformat(), index=index).copy()
+    fill = df["ticker"].map(lambda t: SECTOR_OVERRIDES.get(normalize_ticker(t)))
+    df["gics_sector"] = df["gics_sector"].fillna(fill)
+    return df
+
+
+def pit_price_tickers(
+    start: str,
+    *,
+    index: str = "sp500",
+    max_names: int = 50,
+    seed: list[str] | None = None,
+) -> list[str]:
+    """
+    Names to price: members as of `start` only (no look-ahead), `seed` first,
+    then round-robin across GICS sectors (alphabetical within a sector) so the
+    universe widens evenly instead of by ticker spelling.
+    """
+    roster = constituents_asof(start, index=index)
+    roster["ticker"] = roster["ticker"].map(normalize_ticker)
+    members = set(roster["ticker"])
+    picked = [t for t in dict.fromkeys(normalize_ticker(s) for s in (seed or [])) if t in members]
+
+    queues = {
+        sector: sorted(set(part["ticker"]) - set(picked))
+        for sector, part in roster.dropna(subset=["gics_sector"]).groupby("gics_sector")
+    }
+    while len(picked) < max_names and any(queues.values()):
+        for sector in sorted(queues):
+            if queues[sector] and len(picked) < max_names:
+                picked.append(queues[sector].pop(0))
+    return picked[:max_names]
 
 
 def historical_tickers(start: str, end: str | None = None, index: str = "sp500") -> list[str]:

@@ -243,6 +243,29 @@ def screen_cointegrated_pairs(
         return empty
 
     ranked = result.sort_values("score", ascending=False).reset_index(drop=True)
+    ranked = select_top_pairs(
+        ranked, max_pairs=max_pairs, max_per_sector=max_per_sector
+    )
+
+    ranked.attrs["n_candidates"] = n_candidates
+    ranked.attrs["n_after_corr"] = n_after_corr
+    return ranked
+
+
+def pairs_from_screen(screen: pd.DataFrame) -> list[tuple[str, str]]:
+    return [(str(r.y), str(r.x)) for r in screen.itertuples(index=False)]
+
+
+def select_top_pairs(
+    candidates: pd.DataFrame,
+    *,
+    max_pairs: int = 12,
+    max_per_sector: int | None = 3,
+) -> pd.DataFrame:
+    """Rank by score, apply per-sector cap, then global max_pairs."""
+    if candidates is None or candidates.empty:
+        return candidates.copy() if candidates is not None else pd.DataFrame()
+    ranked = candidates.sort_values("score", ascending=False).reset_index(drop=True)
     if max_per_sector is not None and max_per_sector > 0:
         picked: list[pd.Series] = []
         counts: dict[str, int] = {}
@@ -254,14 +277,26 @@ def screen_cointegrated_pairs(
             counts[sec] = counts.get(sec, 0) + 1
             if len(picked) >= max_pairs:
                 break
-        ranked = pd.DataFrame(picked).reset_index(drop=True)
-    else:
-        ranked = ranked.head(max_pairs)
-
-    ranked.attrs["n_candidates"] = n_candidates
-    ranked.attrs["n_after_corr"] = n_after_corr
-    return ranked
+        return pd.DataFrame(picked).reset_index(drop=True)
+    return ranked.head(max_pairs).reset_index(drop=True)
 
 
-def pairs_from_screen(screen: pd.DataFrame) -> list[tuple[str, str]]:
-    return [(str(r.y), str(r.x)) for r in screen.itertuples(index=False)]
+def filter_pair_log(
+    pair_log: pd.DataFrame,
+    *,
+    max_pairs: int,
+    max_per_sector: int | None,
+) -> pd.DataFrame:
+    """Per refresh_date, keep top pairs under caps (expects a rich candidate pool)."""
+    if pair_log is None or pair_log.empty:
+        return pair_log.copy() if pair_log is not None else pd.DataFrame()
+    log = pair_log.copy()
+    log["refresh_date"] = pd.to_datetime(log["refresh_date"])
+    chunks: list[pd.DataFrame] = []
+    for asof, grp in log.groupby("refresh_date", sort=True):
+        picked = select_top_pairs(grp, max_pairs=max_pairs, max_per_sector=max_per_sector)
+        if not picked.empty:
+            chunks.append(picked)
+    if not chunks:
+        return pd.DataFrame(columns=log.columns)
+    return pd.concat(chunks, ignore_index=True)

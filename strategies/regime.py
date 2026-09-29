@@ -110,22 +110,28 @@ def book_drawdown_scaler(
     Uses previous-day weights * today's returns to build a proxy curve, then
     lags the kill signal by 1 day so the trigger day is not looked ahead.
     Catches pair-breakdown bleed that market-vol shocks miss.
+
+    The high-water mark re-arms at the proxy level where the cooldown ends;
+    otherwise a book that never regains its old peak would stay flat forever.
     """
     rets = prices.pct_change().reindex(index=weights.index, columns=weights.columns).fillna(0.0)
     w = weights.reindex_like(rets).fillna(0.0)
     pnl = (w.shift(1).fillna(0.0) * rets).sum(axis=1)
-    eq = (1.0 + pnl).cumprod()
-    dd = eq / eq.cummax() - 1.0
-    breach = (dd <= float(max_dd)).fillna(False)
+    eq = (1.0 + pnl).cumprod().tolist()
 
     active = pd.Series(False, index=weights.index)
     remaining = 0
-    for i, hit in enumerate(breach.astype(bool).tolist()):
-        if hit:
-            remaining = max(remaining, int(cooldown_days))
+    peak = float("-inf")
+    for i, level in enumerate(eq):
+        if remaining == 0:
+            peak = max(peak, level)
+            if level / peak - 1.0 <= float(max_dd):
+                remaining = int(cooldown_days)
         if remaining > 0:
             active.iloc[i] = True
             remaining -= 1
+            if remaining == 0:
+                peak = level
 
     scale = pd.Series(1.0, index=weights.index)
     scale = scale.where(~active, float(floor))

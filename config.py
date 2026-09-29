@@ -10,8 +10,9 @@ PIT_INDEX = "sp500"
 # asof_start: download S&P members as of START
 # union: all members that ever appeared in [START, END] (paid Tiingo recommended)
 PIT_PRICE_UNIVERSE = "asof_start"
-# Tiingo free starter ~50 req/hour — keep priced universe small for one-shot runs
-PIT_MAX_PRICED_NAMES = 50
+# Tiingo free starter ~50 req/hour, 500 symbols/month — pre-fetch with fetch_universe.py
+# Seeds first, then round-robin across GICS sectors (members as of START)
+PIT_MAX_PRICED_NAMES = 200
 PRICE_PROVIDER = "tiingo"
 
 # Fallback static list (only used when USE_PIT_UNIVERSE=False)
@@ -60,11 +61,18 @@ CS_SECTOR_NEUTRAL = True
 
 # Statistical arbitrage (pairs) — slightly stricter entry = fewer trades
 STATARB_LOOKBACK = 60
-STATARB_ENTRY_Z = 2.5   # was 2.0
+# Pre-tuning defaults kept on purpose: swept picks failed out-of-sample (see README)
+STATARB_ENTRY_Z = 2.5
 STATARB_EXIT_Z = 0.5
 STATARB_STOP_Z = 4.0
 STATARB_HL_TIMEOUT_MULT = 2.0  # exit if not mean-reverted within 2 * half-life days
 STATARB_WEIGHT = 0.5
+
+# z-score / lookback grid (run_z_sweep.py); stop must be > entry > exit
+Z_SWEEP_LOOKBACKS = [42, 60, 90]
+Z_SWEEP_ENTRY = [2.0, 2.5, 3.0]
+Z_SWEEP_EXIT = [0.25, 0.5, 0.75]
+Z_SWEEP_STOP = [3.5, 4.0, 5.0]
 
 # Hybrid: agreement scale; expand book gross only when sleeves agree
 USE_HYBRID_ALLOCATION = True
@@ -99,7 +107,7 @@ SHOCK_FLOOR = 0.0             # 0 = full flatten during shock
 
 # Book trailing stop: flatten Stat Arb when its own DD from peak breaches
 USE_BOOK_DD_STOP = True
-BOOK_DD_MAX = -0.12           # -12% from book high-water mark
+BOOK_DD_MAX = -0.12           # -12% from book high-water mark (re-armed after cooldown)
 BOOK_DD_COOLDOWN = 15
 BOOK_DD_FLOOR = 0.0
 
@@ -119,6 +127,17 @@ COINT_MIN_STABILITY = 0.0
 COINT_MAX_PAIRS = 24
 COINT_MAX_PER_SECTOR = 3
 COINT_MAX_NAMES_PER_SECTOR = 15
+
+# Pair-candidate grouping before cointegration (None = GICS sectors as-is)
+# "corr_cluster" | "sector_corr_cluster": formation-window return-correlation clusters
+PRIMARY_GROUPING = None
+PRIMARY_CLUSTER_MIN_CORR = 0.5
+
+# Pair-count / sector-cap grids (run_pair_cap_sweep.py); pool is screened once
+PAIR_POOL_MAX_PAIRS = 48
+PAIR_POOL_MAX_PER_SECTOR = 8
+PAIR_SWEEP_MAX_PAIRS = [6, 8, 12, 16, 20, 24]
+PAIR_SWEEP_MAX_PER_SECTOR = [1, 2, 3, 4, 5]
 
 # Backtest economics
 INITIAL_CAPITAL = 100_000.0
